@@ -1,0 +1,72 @@
+WIZ JSON Messages
+
+
+REGISTRATION REQUEST 
+broadcast message on port 38899 255.255.255.255
+
+{"method":"registration","params":{"phoneMac":"AAAAAAAAAAAA","register":false,"phoneIp":"1.2.3.4","id":"1"}}
+0000   ff ff ff ff ff ff b0 7d 64 11 50 a8 08 00 45 00   .......}d.P...E.
+0010   00 88 64 2e 00 00 80 11 14 81 c0 a8 01 0e ff ff   ..d.............
+0020   ff ff 97 f3 97 f3 00 74 17 ad 7b 22 6d 65 74 68   .......t..{"meth
+0030   6f 64 22 3a 22 72 65 67 69 73 74 72 61 74 69 6f   od":"registratio
+0040   6e 22 2c 22 70 61 72 61 6d 73 22 3a 7b 22 70 68   n","params":{"ph
+0050   6f 6e 65 4d 61 63 22 3a 22 41 41 41 41 41 41 41   oneMac":"AAAAAAA
+0060   41 41 41 41 41 22 2c 22 72 65 67 69 73 74 65 72   AAAAA","register
+0070   22 3a 66 61 6c 73 65 2c 22 70 68 6f 6e 65 49 70   ":false,"phoneIp
+0080   22 3a 22 31 2e 32 2e 33 2e 34 22 2c 22 69 64 22   ":"1.2.3.4","id"
+0090   3a 22 31 22 7d 7d                                 :"1"}}
+
+REGISTRATION RESPONSE
+
+{"method":"registration","env":"pro","result":{"mac":"a8bb5092f6e1","success":true}}
+0000   b0 7d 64 11 50 a8 a8 bb 50 92 f6 e1 08 00 45 00   .}d.P...P.....E.
+0010   00 70 ee c5 00 00 ff 11 49 50 c0 a8 01 08 c0 a8   .p......IP......
+0020   01 0e 97 f3 97 f3 00 5c 5e e5 7b 22 6d 65 74 68   .......\^.{"meth
+0030   6f 64 22 3a 22 72 65 67 69 73 74 72 61 74 69 6f   od":"registratio
+0040   6e 22 2c 22 65 6e 76 22 3a 22 70 72 6f 22 2c 22   n","env":"pro","
+0050   72 65 73 75 6c 74 22 3a 7b 22 6d 61 63 22 3a 22   result":{"mac":"
+0060   61 38 62 62 35 30 39 32 66 36 65 31 22 2c 22 73   a8bb5092f6e1","s
+0070   75 63 63 65 73 73 22 3a 74 72 75 65 7d 7d         uccess":true}}
+
+
+SET PILOT (ie turn on/off)
+host -> bulb: turn on
+{"method": "setPilot", "params": {"state": true}}
+0000   a8 bb 50 92 f6 e1 b0 7d 64 11 50 a8 08 00 45 00   ..P....}d.P...E.
+0010   00 4d a2 bd 00 00 80 11 14 7c c0 a8 01 0e c0 a8   .M.......|......
+0020   01 08 db 87 97 f3 00 39 c1 3c 7b 22 6d 65 74 68   .......9.<{"meth
+0030   6f 64 22 3a 20 22 73 65 74 50 69 6c 6f 74 22 2c   od": "setPilot",
+0040   20 22 70 61 72 61 6d 73 22 3a 20 7b 22 73 74 61    "params": {"sta
+0050   74 65 22 3a 20 74 72 75 65 7d 7d                  te": true}}
+
+host <- bulb: turn on succeeded
+{"method":"setPilot","env":"pro","result":{"success":true}}
+0000   b0 7d 64 11 50 a8 a8 bb 50 92 f6 e1 08 00 45 00   .}d.P...P.....E.
+0010   00 57 ee ca 00 00 ff 11 49 64 c0 a8 01 08 c0 a8   .W......Id......
+0020   01 0e 97 f3 db 87 00 43 e5 05 7b 22 6d 65 74 68   .......C..{"meth
+0030   6f 64 22 3a 22 73 65 74 50 69 6c 6f 74 22 2c 22   od":"setPilot","
+0040   65 6e 76 22 3a 22 70 72 6f 22 2c 22 72 65 73 75   env":"pro","resu
+0050   6c 74 22 3a 7b 22 73 75 63 63 65 73 73 22 3a 74   lt":{"success":t
+0060   72 75 65 7d 7d                                    rue}}
+
+
+host -> bulb: turn off
+{"method":"setPilot","params":{"state":false}}
+0000   a8 bb 50 92 f6 e1 b0 7d 64 11 50 a8 08 00 45 00   ..P....}d.P...E.
+0010   00 4a a2 c5 00 00 80 11 14 77 c0 a8 01 0e c0 a8   .J.......w......
+0020   01 08 f4 32 97 f3 00 36 68 0d 7b 22 6d 65 74 68   ...2...6h.{"meth
+0030   6f 64 22 3a 22 73 65 74 50 69 6c 6f 74 22 2c 22   od":"setPilot","
+0040   70 61 72 61 6d 73 22 3a 7b 22 73 74 61 74 65 22   params":{"state"
+0050   3a 66 61 6c 73 65 7d 7d                           :false}}
+
+
+host <- bulb: turn off succeeded
+{"method":"setPilot","env":"pro","result":{"success":true}}
+0000   b0 7d 64 11 50 a8 a8 bb 50 92 f6 e1 08 00 45 00   .}d.P...P.....E.
+0010   00 57 f1 2c 00 00 ff 11 47 02 c0 a8 01 08 c0 a8   .W.,....G.......
+0020   01 0e 97 f3 f4 32 00 43 cc 5a 7b 22 6d 65 74 68   .....2.C.Z{"meth
+0030   6f 64 22 3a 22 73 65 74 50 69 6c 6f 74 22 2c 22   od":"setPilot","
+0040   65 6e 76 22 3a 22 70 72 6f 22 2c 22 72 65 73 75   env":"pro","resu
+0050   6c 74 22 3a 7b 22 73 75 63 63 65 73 73 22 3a 74   lt":{"success":t
+0060   72 75 65 7d 7d                                    rue}}
+
