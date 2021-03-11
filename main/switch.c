@@ -25,23 +25,29 @@
 #include <lwip/netdb.h>
 #include "addr_from_stdin.h"
 
-#if defined(CONFIG_EXAMPLE_IPV4)
-#define HOST_IP_ADDR CONFIG_EXAMPLE_IPV4_ADDR
-#elif defined(CONFIG_EXAMPLE_IPV6)
-#define HOST_IP_ADDR CONFIG_EXAMPLE_IPV6_ADDR
-#else
-#define HOST_IP_ADDR ""
-#endif
+// #if defined(CONFIG_EXAMPLE_IPV4)
+// #define HOST_IP_ADDR CONFIG_EXAMPLE_IPV4_ADDR
+// #elif defined(CONFIG_EXAMPLE_IPV6)
+// #define HOST_IP_ADDR CONFIG_EXAMPLE_IPV6_ADDR
+// #else
+// #define HOST_IP_ADDR ""
+// #endif
 
-#define PORT CONFIG_EXAMPLE_PORT
+#define HOST_IP_ADDR "255.255.255.255"
+
+//#define PORT CONFIG_EXAMPLE_PORT
+#define PORT 38899
 
 static const char *TAG = "example";
-static const char *payload = "Message from ESP32 ";
+//static const char *payload = "Message from ESP32 ";
+static const char *payload = "{\"method\":\"registration\",\"params\":{\"phoneMac\":\"AAAAAAAAAAAA\",\"register\":false,\"phoneIp\":\"1.2.3.4\",\"id\":\"1\"}}";
 
+static const char *payload_off = "{\"method\":\"setPilot\",\"params\":{\"state\":false}}";
+static const char *payload_on = "{\"method\":\"setPilot\",\"params\":{\"state\":true}}";
 
 static void udp_client_task(void *pvParameters)
 {
-    char rx_buffer[128];
+    char rx_buffer[256];
     char host_ip[] = HOST_IP_ADDR;
     int addr_family = 0;
     int ip_protocol = 0;
@@ -105,6 +111,20 @@ static void udp_client_task(void *pvParameters)
             }
 
             vTaskDelay(2000 / portTICK_PERIOD_MS);
+
+
+            struct sockaddr_in dest_addr_nightstand;
+            dest_addr_nightstand.sin_addr.s_addr = inet_addr("192.168.1.8");
+            dest_addr_nightstand.sin_family = AF_INET;
+            dest_addr_nightstand.sin_port = htons(PORT);
+            int sock_nightstand = socket(addr_family, SOCK_DGRAM, ip_protocol);
+            sendto(sock_nightstand, payload_off, strlen(payload_off), 0, (struct sockaddr *)&dest_addr_nightstand, sizeof(dest_addr_nightstand));
+
+            socklen = sizeof(source_addr);
+            len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
+            ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
+            ESP_LOGI(TAG, "%s", rx_buffer);
+
         }
 
         if (sock != -1) {
