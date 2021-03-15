@@ -11,9 +11,7 @@
 */
 #include <string.h>
 #include <sys/param.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
+
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -28,7 +26,7 @@
 #include <lwip/netdb.h>
 #include "addr_from_stdin.h"
 
-#include "driver/gpio.h"
+#include "voltage_detect.h"
 
 #define HOST_IP_ADDR "255.255.255.255"
 #define BROADCAST_IP "255.255.255.255"
@@ -51,7 +49,7 @@ static int g_bulbs_discovered = 0;
 
 static const char *TAG = "switch";
 
-static const char *json_delimiters = "{}\":, ";
+static const char *JSON_DELIMITERS = "{}\":, ";
 static const char *registration_payload = "{\"method\":\"registration\",\"params\":{\"phoneMac\":\"AAAAAAAAAAAA\",\"register\":false,\"phoneIp\":\"1.2.3.4\",\"id\":\"1\"}}";
 //static const char *payload_off = "{\"method\":\"setPilot\",\"params\":{\"state\":false}}";
 //static const char *payload_on = "{\"method\":\"setPilot\",\"params\":{\"state\":true}}";
@@ -92,11 +90,13 @@ static void switch_print_bulbs(wiz_bulb_t bulbs[], int length)
     }
 }
 
+// Broadcast to the network on the wiz UDP port
+// Listen for responses, parse the MAC and IP and add the bulb to the list 
+// AFter 5 seconds of no responses, close the socket and return
 static int switch_discover_bulbs(bool clear_list)
 {
     const char *TAG = __func__;
 
-    // Clear current bulb list
     if(clear_list)
     {
         memset(g_bulbs, 0x00, sizeof(g_bulbs));
@@ -141,17 +141,16 @@ static int switch_discover_bulbs(bool clear_list)
         if (len > 0) 
         {
             rx_buffer[len] = 0;
-            char * ip_address = inet_ntoa(response_addr.sin_addr);
-            ESP_LOGI(TAG, "Received %d bytes from %s:", len, ip_address);
+            ESP_LOGI(TAG, "Received %d bytes from %s:", len, inet_ntoa(response_addr.sin_addr));
             ESP_LOGV(TAG, "%s", rx_buffer);
 
-            char * token = strtok(rx_buffer, json_delimiters);
+            char * token = strtok(rx_buffer, JSON_DELIMITERS);
             while(strncmp(token, "mac", 3) != 0)
             {
-                token = strtok(NULL, json_delimiters);
+                token = strtok(NULL, JSON_DELIMITERS);
             }
 
-            if(switch_add_bulb(response_addr.sin_addr.s_addr, strtok(NULL, json_delimiters)))
+            if(switch_add_bulb(response_addr.sin_addr.s_addr, strtok(NULL, JSON_DELIMITERS)))
             {
                 bulbs_found++;
             }
@@ -233,89 +232,6 @@ static void udp_client_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
-#define GPIO_OUTPUT_IO_0    18
-#define GPIO_OUTPUT_IO_1    19
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0) | (1ULL<<GPIO_OUTPUT_IO_1))
-#define GPIO_INPUT_IO_0     4
-#define GPIO_INPUT_IO_1     5
-#define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_IO_0) | (1ULL<<GPIO_INPUT_IO_1))
-#define ESP_INTR_FLAG_DEFAULT 0
-
-static xQueueHandle gpio_evt_queue = NULL;
-
-static void IRAM_ATTR gpio_isr_handler(void* arg)
-{
-    uint32_t gpio_num = (uint32_t) arg;
-    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
-}
-
-static void gpio_task_example(void* arg)
-{
-    uint32_t io_num;
-    for(;;) {
-        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-            printf("GPIO[%d] intr, val: %d\n", io_num, gpio_get_level(io_num));
-        }
-    }
-}
-
-static void gpio_test(void *pvParameters)
-{
-    gpio_config_t io_conf;
-    //disable interrupt
-    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
-    //set as output mode
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    //bit mask of the pins that you want to set,e.g.GPIO18/19
-    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    //disable pull-down mode
-    io_conf.pull_down_en = 0;
-    //disable pull-up mode
-    io_conf.pull_up_en = 0;
-    //configure GPIO with the given settings
-    gpio_config(&io_conf);
-
-    //interrupt of rising edge
-    io_conf.intr_type = GPIO_PIN_INTR_POSEDGE;
-    //bit mask of the pins, use GPIO4/5 here
-    io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
-    //set as input mode    
-    io_conf.mode = GPIO_MODE_INPUT;
-    //enable pull-up mode
-    io_conf.pull_up_en = 1;
-    gpio_config(&io_conf);
-
-    //change gpio intrrupt type for one pin
-    gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_ANYEDGE);
-
-    //create a queue to handle gpio event from isr
-    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-    //start gpio task
-    xTaskCreate(gpio_task_example, "gpio_task_example", 2048, NULL, 10, NULL);
-
-    //install gpio isr service
-    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
-    //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(GPIO_INPUT_IO_1, gpio_isr_handler, (void*) GPIO_INPUT_IO_1);
-
-    //remove isr handler for gpio number.
-    gpio_isr_handler_remove(GPIO_INPUT_IO_0);
-    //hook isr handler for specific gpio pin again
-    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
-
-    int cnt = 0;
-    while(1) 
-    {
-        printf("cnt: %d\n", cnt++);
-        vTaskDelay(1000 / portTICK_RATE_MS);
-        gpio_set_level(GPIO_OUTPUT_IO_0, cnt % 2);
-        gpio_set_level(GPIO_OUTPUT_IO_1, cnt % 2);
-    }
-}
-
-
 void app_main(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -328,6 +244,6 @@ void app_main(void)
      */
     ESP_ERROR_CHECK(example_connect());
 
-    xTaskCreate(udp_client_task, "udp_client", 4096, NULL, 5, NULL);
-    //xTaskCreate(gpio_test, "gpio_test", 4096, NULL, 5, NULL);
+    //xTaskCreate(udp_client_task, "udp_client", 4096, NULL, 5, NULL);
+    xTaskCreate(gpio_test, "gpio_test", 4096, NULL, 5, NULL);
 }
