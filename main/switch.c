@@ -37,26 +37,30 @@
 
 #define MAX_BULBS 10
 
+ESP_EVENT_DEFINE_BASE(VOLTAGE_EVENTS);
+
+static char * g_paired_bulbs[] = {"a8bb5006c224", "a8bb5092f6e1"}; // TODO: Populate this list via UI
+static int g_paired_bulbs_count = 2;
+
 typedef struct wiz_bulb
 {
     char mac[14];
     in_addr_t ip;
-    bool on;
 }wiz_bulb_t;
+
+static const char *TAG = "switch";
 
 static wiz_bulb_t g_bulbs[MAX_BULBS];
 static int g_bulbs_discovered = 0;
 
-static const char *TAG = "switch";
-
 static const char *JSON_DELIMITERS = "{}\":, ";
-static const char *registration_payload = "{\"method\":\"registration\",\"params\":{\"phoneMac\":\"AAAAAAAAAAAA\",\"register\":false,\"phoneIp\":\"1.2.3.4\",\"id\":\"1\"}}";
-//static const char *payload_off = "{\"method\":\"setPilot\",\"params\":{\"state\":false}}";
-//static const char *payload_on = "{\"method\":\"setPilot\",\"params\":{\"state\":true}}";
+static const char *REGISTRATION_PAYLOAD = "{\"method\":\"registration\",\"params\":{\"phoneMac\":\"AAAAAAAAAAAA\",\"register\":false,\"phoneIp\":\"1.2.3.4\",\"id\":\"1\"}}";
+static const char *PAYLOAD_OFF = "{\"method\":\"setPilot\",\"params\":{\"state\":false}}";
+static const char *PAYLOAD_ON = "{\"method\":\"setPilot\",\"params\":{\"state\":true}}";
+static const char *SUCCESS_RESPONSE = "\"success\":true";
 
 static bool switch_add_bulb(in_addr_t ip_address, char * mac_address)
 {
-
     ESP_LOGI(__func__, "ip %d: mac %s", ip_address, mac_address);
 
     for(int i = 0; i < MAX_BULBS; i++)
@@ -90,6 +94,71 @@ static void switch_print_bulbs(wiz_bulb_t bulbs[], int length)
     }
 }
 
+static int switch_socket_create(struct sockaddr_in * socket_struct, in_addr_t ip_address, int port)
+{
+    socket_struct->sin_addr.s_addr = ip_address;
+    socket_struct->sin_family = AF_INET;
+    socket_struct->sin_port = htons(port);
+
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock < 0) 
+    {
+        ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+        return -1;
+    }
+    return sock;
+}
+
+static bool switch_send_payload_to_bulb(char * mac_address, const char * payload, int payload_length)
+{
+    in_addr_t ip_address = 0; 
+    struct sockaddr_in socket_send_struct;
+    int socket_number; 
+
+    struct sockaddr_in socket_receive_struct;
+    socklen_t receive_size = sizeof(socket_receive_struct);
+    char rx_buffer[256];
+
+    // Lookup IP for bulb using mac, fail if not found
+    for(int i = 0; i < g_bulbs_discovered; i++)
+    {
+        wiz_bulb_t bulb = g_bulbs[i];
+        if(strncmp(bulb.mac, mac_address, strlen(mac_address)) == 0)
+        {
+            ip_address = bulb.ip;
+            break;
+        }
+    }
+
+    if(ip_address == 0)
+    {
+        ESP_LOGW(TAG, "No bulb with mac %s found", mac_address);
+        return false;
+    }
+
+    // Open 'socket' with bulb via IP
+    socket_number = switch_socket_create(&socket_send_struct, ip_address, PORT);
+
+    if(socket_number < 0)
+        return false;
+
+    // Send payload
+    if(sendto(socket_number, payload, payload_length, 0,  (struct sockaddr *)&socket_send_struct, sizeof(socket_send_struct)) < 0)  
+        return false;
+
+    // Read a resonse
+    memset(rx_buffer, 0x00, sizeof(rx_buffer));
+    
+    int len = recvfrom(socket_number, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&socket_receive_struct, &receive_size);
+    rx_buffer[len] = 0;
+
+    shutdown(socket_number, 0);
+    close(socket_number);    
+
+    // Parse response for success = true
+    return (strstr(rx_buffer, SUCCESS_RESPONSE) != NULL);
+}
+
 // Broadcast to the network on the wiz UDP port
 // Listen for responses, parse the MAC and IP and add the bulb to the list 
 // AFter 5 seconds of no responses, close the socket and return
@@ -108,35 +177,30 @@ static int switch_discover_bulbs(bool clear_list)
     int timeout_count = 0;
 
     // Open socket to broadcast on
-    char rx_buffer[256];
-    memset(rx_buffer, 0x00, sizeof(rx_buffer));
-
     struct sockaddr_in broadcast_address;
-    broadcast_address.sin_addr.s_addr = inet_addr(BROADCAST_IP);
-    broadcast_address.sin_family = AF_INET;
-    broadcast_address.sin_port = htons(PORT);
+    int socket_number = switch_socket_create(&broadcast_address, inet_addr(BROADCAST_IP), PORT);
 
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    if (sock < 0) 
-    {
-        ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+    if (socket_number < 0)
         return -1;
-    }
+
     ESP_LOGI(TAG, "Socket created, broadcasting to %s:%d", BROADCAST_IP, PORT);
 
-    int err = sendto(sock, registration_payload, strlen(registration_payload), 0, (struct sockaddr *)&broadcast_address, sizeof(broadcast_address));
+    int err = sendto(socket_number, REGISTRATION_PAYLOAD, strlen(REGISTRATION_PAYLOAD), 0, (struct sockaddr *)&broadcast_address, sizeof(broadcast_address));
     if (err < 0) 
     {
         ESP_LOGE(TAG, "Error occurred during broadcast: errno %d", errno);
         return -1;
     }
 
+    // Receive broadcast responses
+    char rx_buffer[256];
+    memset(rx_buffer, 0x00, sizeof(rx_buffer));
     struct sockaddr_in response_addr;
     socklen_t socklen = sizeof(response_addr);
 
     while(1)
-    {
-        int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, MSG_DONTWAIT, (struct sockaddr *)&response_addr, &socklen);
+    {   
+        int len = recvfrom(socket_number, rx_buffer, sizeof(rx_buffer) - 1, MSG_DONTWAIT, (struct sockaddr *)&response_addr, &socklen);
 
         if (len > 0) 
         {
@@ -179,57 +243,47 @@ static int switch_discover_bulbs(bool clear_list)
         bulb_found_this_pass = false;
     }
     
-    if(sock != -1)
-    {
-        shutdown(sock, 0);
-        close(sock);    
-    }
+    shutdown(socket_number, 0);
+    close(socket_number);
 
     return bulbs_found;
 }
 
-
-static void udp_client_task(void *pvParameters)
+static bool switch_turn_on_paired_bulbs(bool on)
 {
-    // Run state machine with states
-    // State machine poll logic:
-    //  if a GPIO is set high/low 
-    //      go to setup state -> Start soft AP, setup http server, user inputs wifi credentials for real network, scan other network, collect bulbs
-    //  else 
-    //      if on main power
-    //          go to ON state -> turn on stored lights
-    //      if off main power 
-    //          go to OFF state -> turn off stored lights
-    //          go to sleep state
-    while (1) 
+    // go through list of paired bulbs
+    for(int i = 0; i < g_paired_bulbs_count; i++)
     {
-        switch_discover_bulbs(true);
-        ESP_LOGI(TAG, "Found %d bulbs", g_bulbs_discovered);
-        switch_print_bulbs(g_bulbs, g_bulbs_discovered);
-
-        int new_bulbs = switch_discover_bulbs(false);
-        ESP_LOGI(TAG, "Found %d more bulbs", new_bulbs);
-        switch_print_bulbs(g_bulbs, g_bulbs_discovered);
-
-        vTaskDelay(60000 / portTICK_PERIOD_MS);
-
-        // //------
-        // char rx_buffer[256];
-        // struct sockaddr_in dest_addr_nightstand;
-        // dest_addr_nightstand.sin_addr.s_addr = inet_addr("192.168.1.8");
-        // dest_addr_nightstand.sin_family = AF_INET;
-        // dest_addr_nightstand.sin_port = htons(PORT);
-        // int sock_nightstand = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-        // sendto(sock_nightstand, payload_off, strlen(payload_off), 0, (struct sockaddr *)&dest_addr_nightstand, sizeof(dest_addr_nightstand));
-
-        // socklen_t socklen = sizeof(dest_addr_nightstand);
-        // int len = recvfrom(sock_nightstand, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&dest_addr_nightstand, &socklen);
-        // //ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
-        // ESP_LOGI(TAG, "%s", rx_buffer);
-        // //------
+        const char * payload = on ? PAYLOAD_ON : PAYLOAD_OFF;
+        // TODO: retry if failed
+        bool ok = switch_send_payload_to_bulb(g_paired_bulbs[i], payload, strlen(payload));    
+        ESP_LOGI(__func__, "bulb %s success: %d", g_paired_bulbs[i], ok);
     }
 
-    vTaskDelete(NULL);
+    return true;
+}
+
+static void switch_5v_on_handler(void* handler_args, esp_event_base_t base, int32_t id, void* event_data)
+{
+    ESP_LOGW(TAG, "5v on");
+    switch_turn_on_paired_bulbs(true);
+}
+
+static void switch_5v_off_handler(void* handler_args, esp_event_base_t base, int32_t id, void* event_data)
+{
+    ESP_LOGW(TAG, "5v off");
+    switch_turn_on_paired_bulbs(false);
+}
+
+static void switch_init()
+{
+    switch_discover_bulbs(true);
+    ESP_LOGI(TAG, "Found %d bulbs", g_bulbs_discovered);
+    switch_print_bulbs(g_bulbs, g_bulbs_discovered);
+
+    int new_bulbs = switch_discover_bulbs(false);
+    ESP_LOGI(TAG, "Found %d more bulbs", new_bulbs);
+    switch_print_bulbs(g_bulbs, g_bulbs_discovered);
 }
 
 void app_main(void)
@@ -244,6 +298,11 @@ void app_main(void)
      */
     ESP_ERROR_CHECK(example_connect());
 
+    voltage_detect_init();
+    switch_init();
     //xTaskCreate(udp_client_task, "udp_client", 4096, NULL, 5, NULL);
-    xTaskCreate(gpio_test, "gpio_test", 4096, NULL, 5, NULL);
+    //xTaskCreate(gpio_test, "gpio_test", 4096, NULL, 5, NULL);
+
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(VOLTAGE_EVENTS, VOLTAGE_EVENT_5V_ON, switch_5v_on_handler, NULL, NULL));;
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(VOLTAGE_EVENTS, VOLTAGE_EVENT_5V_OFF, switch_5v_off_handler, NULL, NULL));;
 }

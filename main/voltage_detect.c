@@ -14,37 +14,52 @@
 
 #include "voltage_detect.h"
 
-#define GPIO_OUTPUT_IO_18    18 // Debug IO
-#define GPIO_OUTPUT_PIN_SEL  (1ULL<<GPIO_OUTPUT_IO_18)
+#define GPIO_DEBUG_OUTPUT    18 // Debug IO
+#define GPIO_DEBUG_OUTPUT_PIN_SEL  (1ULL<<GPIO_DEBUG_OUTPUT)
 
-#define GPIO_INPUT_IO_4      4  // 5V power detection
+#define GPIO_5V_DETECTION    4  // 5V power detection
 #define GPIO_INPUT_IO_34     34 // Charging status - low when on 5V
 #define GPIO_INPUT_IO_35     35 // Vbat voltage divider
-#define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_IO_34) | (1ULL<<GPIO_INPUT_IO_35) | (1ULL<<GPIO_OUTPUT_IO_18) | (1ULL<<GPIO_INPUT_IO_4))
+#define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_IO_34) | (1ULL<<GPIO_INPUT_IO_35) | (1ULL<<GPIO_DEBUG_OUTPUT) | (1ULL<<GPIO_5V_DETECTION))
 
 #define ESP_INTR_FLAG_DEFAULT 0
 
-static QueueHandle_t gpio_evt_queue = NULL;
+static const char *TAG = "voltage_detect";
+
+static QueueHandle_t g_voltage_detect_event_queue = NULL;
+static bool g_on_usb_power = false;
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
-    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+    xQueueSendFromISR(g_voltage_detect_event_queue, &gpio_num, NULL);
 }
 
-static void gpio_task_example(void* arg)
+// Get GPIO edge change interrupt notifications
+static void voltage_detect_task(void* arg)
 {
     uint32_t io_num;
-    for(;;) {
-        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+    for(;;) 
+    {
+        if(xQueueReceive(g_voltage_detect_event_queue, &io_num, portMAX_DELAY)) 
+        {
+            // Do we need to debounce?
+            // Check state
+            // if different than last confirmed state
+            //     if no confirmation timer started, start one for 1ms
+            //     if confirmation timer created and running, do nothing
             int level = gpio_get_level(io_num);
-            printf("GPIO[%d] intr, val: %d\n", io_num, gpio_get_level(io_num));
-            gpio_set_level(GPIO_OUTPUT_IO_18, level);
+            ESP_LOGI(TAG, "5V power: %d", gpio_get_level(io_num));
+            gpio_set_level(GPIO_DEBUG_OUTPUT, level); // Mirror 5v power state
+
+            ESP_ERROR_CHECK(esp_event_post(VOLTAGE_EVENTS, level ? VOLTAGE_EVENT_5V_ON : VOLTAGE_EVENT_5V_OFF, NULL, 0, portMAX_DELAY));
         }
     }
 }
 
-void gpio_test(void *pvParameters)
+// Configure 5v power detection pin and edge detection ISR
+// Start 5v monitoring task
+void voltage_detect_init(void)
 {
     int result;
     gpio_config_t io_conf;
@@ -57,55 +72,56 @@ void gpio_test(void *pvParameters)
     result = gpio_config(&io_conf);
     if (result != ESP_OK)
     {
-        printf("gpio config error input\n");
+        ESP_LOGI(TAG, "gpio config error input\n");
     }
 
     // Configure output pin
     io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
-    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
+    io_conf.pin_bit_mask = GPIO_DEBUG_OUTPUT_PIN_SEL;
     io_conf.mode = GPIO_MODE_OUTPUT;
     io_conf.pull_down_en = 1;
     result = gpio_config(&io_conf);
     if (result != ESP_OK)
     {
-        printf("gpio config error output\n");
+        ESP_LOGI(TAG, "gpio config error output\n");
     }
 
     // Configure 5v edge detection interrupt
     io_conf.intr_type = GPIO_INTR_ANYEDGE;
-    io_conf.pin_bit_mask = (1ULL<<GPIO_INPUT_IO_4);
+    io_conf.pin_bit_mask = (1ULL<<GPIO_5V_DETECTION);
     io_conf.mode = GPIO_MODE_INPUT;
     io_conf.pull_up_en = 1;
     result = gpio_config(&io_conf);
     if (result != ESP_OK)
     {
-        printf("gpio config error interrupt\n");
+        ESP_LOGI(TAG, "gpio config error interrupt\n");
     }
 
-    //create a queue to handle gpio event from isr
-    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-    //start gpio task
-    xTaskCreate(gpio_task_example, "gpio_task_example", 2048, NULL, 10, NULL);
+    g_on_usb_power = gpio_get_level(GPIO_5V_DETECTION);
+    ESP_LOGI(TAG, "USB power: %d", g_on_usb_power);
 
-    //install gpio isr service
+    g_voltage_detect_event_queue = xQueueCreate(10, sizeof(uint32_t));
+    xTaskCreate(voltage_detect_task, "voltage_detect_task", 2048, NULL, 10, NULL);
+
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(GPIO_INPUT_IO_4, gpio_isr_handler, (void*) GPIO_INPUT_IO_4);
+    gpio_isr_handler_add(GPIO_5V_DETECTION, gpio_isr_handler, (void*) GPIO_5V_DETECTION);
+}
 
+void gpio_test(void *pvParameters)
+{
     int cnt = 0;
     int statCount = 0;
     while(1)
     {
-        
         vTaskDelay(1000 / portTICK_RATE_MS);
         int statLevel = gpio_get_level(GPIO_INPUT_IO_34);
         if(statLevel)
         {
             statCount++;
         }
-        printf("GPIO[%d]: %d\n", GPIO_INPUT_IO_4, gpio_get_level(GPIO_INPUT_IO_4));
-        printf("GPIO[%d]: %d\n", GPIO_INPUT_IO_34, statLevel);
-        printf("GPIO[%d]: %d\n", GPIO_INPUT_IO_35, gpio_get_level(GPIO_INPUT_IO_35));
-        printf("cnt: %d statcount %d\n", cnt++, statCount);
+        ESP_LOGI(TAG, "GPIO[%d]: %d\n", GPIO_5V_DETECTION, gpio_get_level(GPIO_5V_DETECTION));
+        ESP_LOGI(TAG, "GPIO[%d]: %d\n", GPIO_INPUT_IO_34, statLevel);
+        ESP_LOGI(TAG, "GPIO[%d]: %d\n", GPIO_INPUT_IO_35, gpio_get_level(GPIO_INPUT_IO_35));
+        ESP_LOGI(TAG, "cnt: %d statcount %d\n", cnt++, statCount);
     }
 }
