@@ -12,3 +12,15 @@ The lightswitch in my bedroom does not control any hardwired fixtures, but rathe
 ![switch_on](https://user-images.githubusercontent.com/26395394/111260669-7c534d00-85de-11eb-8cd5-b99d08be2b09.png)
 
 ![switch_off](https://user-images.githubusercontent.com/26395394/111260682-807f6a80-85de-11eb-86b8-a97dd5a615a3.png)
+
+
+# TODOs:
+Software:
+-Put board into deep sleep mode after sending the OFF payload in order to maximize battery life
+-Implement "setup mode" via soft AP or some other method to select which bulbs you want to "pair" and control via the switch
+-Use setup mode to identify bulbs, store them with a "name" etc. 
+-Move beyond the example espidf wifi connection code
+
+Hardware:
+-Solder down board to perma-proto board with voltage divider circuit
+-Figure out a small enclosure to affix to wallwart
